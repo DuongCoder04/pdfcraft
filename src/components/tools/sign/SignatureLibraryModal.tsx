@@ -5,6 +5,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import {
   getSavedSignatures,
+  saveSignature,
   deleteSignature,
   PDFCraftSignature,
   dataUrlToBlob,
@@ -26,9 +27,42 @@ export function SignatureLibraryModal({
 }: SignatureLibraryModalProps) {
   const [signatures, setSignatures] = useState<PDFCraftSignature[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const loadList = () => {
     setSignatures(getSavedSignatures());
+  };
+
+  const handleImageFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new Image();
+      img.onload = async () => {
+        const name = file.name.replace(/\.[^/.]+$/, '');
+        const saved = saveSignature({
+          name: name || '签名图片',
+          dataUrl,
+          width: img.width || 300,
+          height: img.height || 150,
+          sourceDoc: '本地图片导入',
+        });
+        loadList();
+
+        // If viewer is ready, immediately apply to document
+        if (viewerWindow && (viewerWindow as any).pdfcraftImportSignature) {
+          const blob = dataUrlToBlob(dataUrl);
+          await (viewerWindow as any).pdfcraftImportSignature(blob, saved.name);
+          onClose();
+        }
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   useEffect(() => {
@@ -87,21 +121,39 @@ export function SignatureLibraryModal({
       className="!max-w-2xl"
     >
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-        <div className="flex items-center justify-between">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+          className="hidden"
+          onChange={handleImageFileSelected}
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-[hsl(var(--color-muted-foreground))]">
             已保存 {signatures.length} 个个性化手写签名与印章，可随时重用或应用到文档。
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              onClose();
-              onOpenExtractor();
-            }}
-            className="text-xs"
-          >
-            ➕ 从已签署 PDF 提取
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-xs"
+            >
+              🖼️ 上传图片签名
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                onClose();
+                onOpenExtractor();
+              }}
+              className="text-xs"
+            >
+              ➕ 从已签署 PDF 提取
+            </Button>
+          </div>
         </div>
 
         {signatures.length === 0 ? (
@@ -121,18 +173,27 @@ export function SignatureLibraryModal({
             </svg>
             <p className="text-sm font-medium text-gray-700 mb-1">暂无已保存的签名</p>
             <p className="text-xs text-gray-500 mb-4 max-w-sm mx-auto">
-              您可以上传一份已在 Adobe Acrobat 等工具中签署过的文件，一键提取专属签名。
+              您可以直接上传本地透明 PNG / JPG 签名图片，或上传已在 Adobe Acrobat 中签署过的文件提取签名。
             </p>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                onClose();
-                onOpenExtractor();
-              }}
-            >
-              立即从已签署 PDF 提取
-            </Button>
+            <div className="flex items-center justify-center gap-3">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                🖼️ 上传签名图片 (PNG/JPG)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  onClose();
+                  onOpenExtractor();
+                }}
+              >
+                从已签署 PDF 提取
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

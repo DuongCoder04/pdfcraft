@@ -9,7 +9,7 @@ import { withBasePath } from '@/lib/utils/path';
 import { saveBlobFile } from '@/lib/tauri-bridge';
 import { SignatureExtractorModal } from './SignatureExtractorModal';
 import { SignatureLibraryModal } from './SignatureLibraryModal';
-import { getSavedSignatures } from '@/lib/pdf/signature-storage';
+import { getSavedSignatures, saveSignature, dataUrlToBlob } from '@/lib/pdf/signature-storage';
 
 export interface SignPDFToolProps {
   className?: string;
@@ -82,6 +82,41 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileRef = useRef<File | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleQuickImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new Image();
+      img.onload = async () => {
+        const name = file.name.replace(/\.[^/.]+$/, '');
+        const saved = saveSignature({
+          name: name || '签名图片',
+          dataUrl,
+          width: img.width || 300,
+          height: img.height || 150,
+          sourceDoc: '本地图片导入',
+        });
+        setSavedSignatureCount(getSavedSignatures().length);
+
+        if (iframeRef.current?.contentWindow && (iframeRef.current.contentWindow as any).pdfcraftImportSignature) {
+          const blob = dataUrlToBlob(dataUrl);
+          await (iframeRef.current.contentWindow as any).pdfcraftImportSignature(blob, saved.name);
+          setToastMessage(`签名“${saved.name}”已成功导入并在当前文档激活！可在页面点击放置并拖动边角自由缩放。`);
+        } else {
+          setToastMessage(`签名“${saved.name}”已存入签名库！打开 PDF 后即可随时选用盖章。`);
+        }
+        setTimeout(() => setToastMessage(null), 6000);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }, []);
 
   /**
    * Handle file selected
@@ -288,7 +323,15 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+          className="hidden"
+          onChange={handleQuickImageUpload}
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -304,6 +347,15 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
           </Button>
 
           <Button
+            variant="outline"
+            size="sm"
+            onClick={() => imageInputRef.current?.click()}
+            className="text-xs bg-white hover:bg-gray-50 flex items-center gap-1.5 border-blue-300 text-blue-700"
+          >
+            <span>🖼️ 导入图片签名</span>
+          </Button>
+
+          <Button
             variant="primary"
             size="sm"
             onClick={() => setIsExtractorOpen(true)}
@@ -312,7 +364,7 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
-            <span>提取签名</span>
+            <span>从 PDF 提取</span>
           </Button>
         </div>
       </div>
@@ -400,10 +452,10 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
               <div className="text-sm text-blue-700">
                 <p className="font-medium mb-1">{tTools('signPdf.instructionsTitle') || 'How to Sign'}</p>
                 <ol className="list-decimal list-inside space-y-1 text-blue-600">
-                  <li>{tTools('signPdf.instruction1') || 'Click the Signature tool (pen icon) in the toolbar'}</li>
-                  <li>{tTools('signPdf.instruction2') || 'Draw, type, or upload your signature'}</li>
-                  <li>{tTools('signPdf.instruction3') || 'Click where you want to place the signature'}</li>
-                  <li>{tTools('signPdf.instruction4') || 'Click "Save Signed PDF" below when done'}</li>
+                  <li>{tTools('signPdf.instruction1') || '点击工具栏中的签名笔工具（或使用上方快捷导入图片/从 PDF 提取）'}</li>
+                  <li>{tTools('signPdf.instruction2') || '选择手写绘制、输入文本，或直接上传现成的透明 PNG 图片签名'}</li>
+                  <li>{tTools('signPdf.instruction3') || '在页面点击放置签名，可随意拖拽四角自由调整大小（Resize）与旋转'}</li>
+                  <li>{tTools('signPdf.instruction4') || '完成签署后，点击下方的“保存已签署 PDF”'}</li>
                 </ol>
               </div>
             </div>
