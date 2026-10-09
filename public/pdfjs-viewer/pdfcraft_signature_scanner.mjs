@@ -17,20 +17,42 @@
  */
 
 const SCAN_PARAMETERS = Object.freeze({
-  // Longest side of the decoded photo kept in memory.
-  maxWorkingDim: 2048,
+  // Longest side of the decoded photo kept in memory. Large enough to keep
+  // the full resolution of a typical 12 MP phone photo.
+  maxWorkingDim: 4096,
   // Longest side of the cropped area that is cleaned up.
-  maxCropDim: 1600,
+  maxCropDim: 2400,
   // Longest side of the downscaled photo used to auto-detect the signature.
-  detectionDim: 640,
-  // Percentile of a block's luminance used as the paper brightness.
-  backgroundPercentile: 0.9,
+  detectionDim: 1024,
+  // Detection uses a higher sensitivity so that faint strokes are framed too.
+  detectionSensitivity: 70,
+  // Blobs with less ink than this fraction of the largest blob are not
+  // considered part of the signature when detecting it.
+  detectionMinInkRatio: 0.1,
+  // Window radius used to estimate the paper brightness, relative to the
+  // longest side. It must be wider than half a pen stroke.
+  backgroundRadiusRatio: 0.012,
+  minBackgroundRadius: 4,
   // Darkness threshold (0-255, relative to the paper) for sensitivity 0..100.
   minThreshold: 12,
   maxThreshold: 120,
+  // Pixels at least this fraction of the threshold dark are kept when they
+  // touch a stroke (hysteresis), so thin and faint parts of strokes survive.
+  hysteresisRatio: 0.5,
+  // One pixel of smoothing per this many pixels of the longest side. Fills
+  // the lighter centre of glossy ballpoint strokes and reduces sensor noise.
+  smoothingScale: 1000,
   // Ink blobs smaller than this fraction of the area are treated as noise.
   speckleAreaRatio: 0.00002,
-  minSpeckleArea: 4,
+  minSpeckleArea: 6,
+  // A detected signature this much taller than wide is rotated upright.
+  uprightRatio: 1.5,
+  // Longest side of the image PDF.js turns into a vector signature.
+  vectorMaxDim: 2048,
+  // Gray level (0-255) below which PDF.js counts a pixel as ink. Contours run
+  // along the inside of the edge, so a value above 127 keeps the strokes as
+  // thick as they are on paper.
+  vectorThreshold: 191,
   // Transparent padding kept around the trimmed signature, in pixels.
   trimPadding: 8,
   // Delay before re-processing while the user drags or slides.
@@ -58,75 +80,128 @@ function toGrayscale(rgba, width, height) {
 }
 
 /**
+ * Sliding-window maximum or minimum of `src` (length `length`, read with
+ * `stride`) over a window of `radius` pixels on each side, written to `dst`.
+ * Uses the van Herk/Gil-Werman algorithm: O(1) per pixel for any radius.
+ */
+function slidingExtremum(src, dst, offset, stride, length, radius, isMax, g, h) {
+  const size = 2 * radius + 1;
+  const pick = isMax ? Math.max : Math.min;
+  const pad = isMax ? 0 : 255;
+  const at = i => (i < 0 || i >= length ? pad : src[offset + i * stride]);
+  // g: running extremum from the start of each block, h: from the end.
+  const total = length + 2 * radius;
+  for (let i = 0; i < total; i++) {
+    const v = at(i - radius);
+    g[i] = i % size === 0 ? v : pick(g[i - 1], v);
+  }
+  for (let i = total - 1; i >= 0; i--) {
+    const v = at(i - radius);
+    h[i] = i === total - 1 || (i + 1) % size === 0 ? v : pick(h[i + 1], v);
+  }
+  for (let i = 0; i < length; i++) {
+    dst[offset + i * stride] = pick(h[i], g[i + 2 * radius]);
+  }
+}
+
+/** Separable square maximum (isMax) or minimum filter. */
+function squareFilter(src, width, height, radius, isMax) {
+  const tmp = new Uint8ClampedArray(src.length);
+  const out = new Uint8ClampedArray(src.length);
+  const scratch = Math.max(width, height) + 2 * radius;
+  const g = new Uint8ClampedArray(scratch);
+  const h = new Uint8ClampedArray(scratch);
+  for (let y = 0; y < height; y++) {
+    slidingExtremum(src, tmp, y * width, 1, width, radius, isMax, g, h);
+  }
+  for (let x = 0; x < width; x++) {
+    slidingExtremum(tmp, out, x, width, height, radius, isMax, g, h);
+  }
+  return out;
+}
+
+/**
  * Estimate the brightness of the paper behind every pixel.
  *
- * Photos of paper are rarely evenly lit, so a single global threshold leaves
- * shadows behind. The image is split into blocks, the bright percentile of
- * each block is taken as the local paper brightness (ink strokes only cover a
- * small part of a block) and the block values are bilinearly interpolated.
+ * Photos of paper are rarely evenly lit and often contain the sharp shadow
+ * of the phone or hand, so a single global threshold does not work. A
+ * grayscale morphological closing (maximum filter followed by a minimum
+ * filter) removes every dark detail narrower than the window, i.e. the pen
+ * strokes, while following lighting gradients and shadow edges. A light blur
+ * removes the blockiness of the square window.
  * @param {Uint8ClampedArray} gray
  * @param {number} width
  * @param {number} height
- * @param {number} [blockSize]
+ * @param {number} [radius] - Must be larger than half the stroke width.
  * @returns {Uint8ClampedArray}
  */
-function estimateBackground(gray, width, height, blockSize) {
-  const size =
-    blockSize ||
-    Math.max(16, Math.round(Math.min(width, height) / 8));
-  const gridW = Math.ceil(width / size);
-  const gridH = Math.ceil(height / size);
-  const grid = new Float32Array(gridW * gridH);
-  const histogram = new Uint32Array(256);
-
-  for (let gy = 0; gy < gridH; gy++) {
-    const y0 = gy * size;
-    const y1 = Math.min(height, y0 + size);
-    for (let gx = 0; gx < gridW; gx++) {
-      const x0 = gx * size;
-      const x1 = Math.min(width, x0 + size);
-      histogram.fill(0);
-      for (let y = y0; y < y1; y++) {
-        const row = y * width;
-        for (let x = x0; x < x1; x++) {
-          histogram[gray[row + x]]++;
-        }
-      }
-      const count = (x1 - x0) * (y1 - y0);
-      const target = count * SCAN_PARAMETERS.backgroundPercentile;
-      let sum = 0;
-      let value = 255;
-      for (let v = 0; v < 256; v++) {
-        sum += histogram[v];
-        if (sum >= target) {
-          value = v;
-          break;
-        }
-      }
-      grid[gy * gridW + gx] = Math.max(1, value);
-    }
-  }
-
-  // Bilinear interpolation between block centres.
+function estimateBackground(gray, width, height, radius) {
+  const r =
+    radius ||
+    Math.max(
+      SCAN_PARAMETERS.minBackgroundRadius,
+      Math.round(Math.max(width, height) * SCAN_PARAMETERS.backgroundRadiusRatio)
+    );
+  const closed = squareFilter(squareFilter(gray, width, height, r, true), width, height, r, false);
+  const smooth = Float32Array.from(closed);
+  boxBlur(smooth, width, height, Math.max(1, r >> 2));
   const background = new Uint8ClampedArray(width * height);
-  for (let y = 0; y < height; y++) {
-    const fy = Math.min(Math.max((y + 0.5) / size - 0.5, 0), gridH - 1);
-    const gy0 = Math.floor(fy);
-    const gy1 = Math.min(gy0 + 1, gridH - 1);
-    const ty = fy - gy0;
-    for (let x = 0; x < width; x++) {
-      const fx = Math.min(Math.max((x + 0.5) / size - 0.5, 0), gridW - 1);
-      const gx0 = Math.floor(fx);
-      const gx1 = Math.min(gx0 + 1, gridW - 1);
-      const tx = fx - gx0;
-      const top =
-        grid[gy0 * gridW + gx0] * (1 - tx) + grid[gy0 * gridW + gx1] * tx;
-      const bottom =
-        grid[gy1 * gridW + gx0] * (1 - tx) + grid[gy1 * gridW + gx1] * tx;
-      background[y * width + x] = top * (1 - ty) + bottom * ty;
-    }
+  for (let i = 0, ii = background.length; i < ii; i++) {
+    // The blur must never make the paper darker than the photo itself.
+    background[i] = Math.max(1, smooth[i], gray[i]);
   }
   return background;
+}
+
+/**
+ * In-place separable box blur.
+ * @param {Float32Array} values
+ * @param {number} width
+ * @param {number} height
+ * @param {number} radius
+ */
+function boxBlur(values, width, height, radius) {
+  if (radius < 1) {
+    return;
+  }
+  const line = new Float32Array(Math.max(width, height));
+  const blurLine = (get, set, length) => {
+    for (let i = 0; i < length; i++) {
+      line[i] = get(i);
+    }
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < Math.min(radius, length); i++) {
+      sum += line[i];
+      count++;
+    }
+    for (let i = 0; i < length; i++) {
+      if (i + radius < length) {
+        sum += line[i + radius];
+        count++;
+      }
+      if (i - radius - 1 >= 0) {
+        sum -= line[i - radius - 1];
+        count--;
+      }
+      set(i, sum / count);
+    }
+  };
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    blurLine(
+      x => values[row + x],
+      (x, v) => (values[row + x] = v),
+      width
+    );
+  }
+  for (let x = 0; x < width; x++) {
+    blurLine(
+      y => values[y * width + x],
+      (y, v) => (values[y * width + x] = v),
+      height
+    );
+  }
 }
 
 /**
@@ -189,8 +264,14 @@ function labelComponents(mask, width, height) {
 /**
  * Separate ink from paper.
  *
- * Returns an ink coverage map (0 = paper, 255 = solid ink) with soft,
- * anti-aliased edges, small specks removed, and the bounding box of the ink.
+ * The darkness of every pixel relative to the local paper brightness is
+ * smoothed slightly, then thresholded with hysteresis: pixels darker than the
+ * threshold are ink, and fainter pixels are kept only when they belong to a
+ * blob that contains such ink. Edges stay anti-aliased and blobs with too
+ * little ink are dropped as noise.
+ *
+ * Returns an ink coverage map (0 = paper, 255 = solid ink) and the bounding
+ * box of the ink.
  * @param {Uint8ClampedArray} rgba
  * @param {number} width
  * @param {number} height
@@ -203,41 +284,52 @@ function labelComponents(mask, width, height) {
  */
 function extractInk(rgba, width, height, options = {}) {
   const { sensitivity = DEFAULT_SENSITIVITY, despeckle = true } = options;
+  const N = width * height;
   const gray = toGrayscale(rgba, width, height);
   const background = estimateBackground(gray, width, height);
-  const threshold = sensitivityToThreshold(sensitivity);
-  const softness = Math.max(8, threshold * 0.35);
 
-  const alpha = new Uint8ClampedArray(width * height);
-  for (let i = 0, ii = alpha.length; i < ii; i++) {
+  // Darkness relative to the local paper brightness, 0..255.
+  const darkness = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
     const bg = background[i];
-    // Darkness relative to the local paper brightness, 0..255.
-    const darkness = gray[i] >= bg ? 0 : (255 * (bg - gray[i])) / bg;
-    const t = (darkness - threshold + softness) / (2 * softness);
-    if (t > 0) {
-      const c = Math.min(1, t);
-      alpha[i] = 255 * c * c * (3 - 2 * c);
+    darkness[i] = gray[i] >= bg ? 0 : (255 * (bg - gray[i])) / bg;
+  }
+  boxBlur(
+    darkness,
+    width,
+    height,
+    Math.round(Math.max(width, height) / SCAN_PARAMETERS.smoothingScale)
+  );
+
+  const strong = sensitivityToThreshold(sensitivity);
+  const weak = strong * SCAN_PARAMETERS.hysteresisRatio;
+  const candidates = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    candidates[i] = darkness[i] >= weak ? 1 : 0;
+  }
+  const { labels, count } = labelComponents(candidates, width, height);
+  const strongPixels = new Uint32Array(count + 1);
+  for (let i = 0; i < N; i++) {
+    if (labels[i] && darkness[i] >= strong) {
+      strongPixels[labels[i]]++;
     }
   }
+  const minStrong = despeckle
+    ? Math.max(
+        SCAN_PARAMETERS.minSpeckleArea,
+        Math.round(N * SCAN_PARAMETERS.speckleAreaRatio)
+      )
+    : 1;
 
-  if (despeckle) {
-    const minArea = Math.max(
-      SCAN_PARAMETERS.minSpeckleArea,
-      Math.round(width * height * SCAN_PARAMETERS.speckleAreaRatio)
-    );
-    const { labels, count } = labelComponents(alpha, width, height);
-    // Count "solid" pixels per blob, so faint halos do not keep a speck alive.
-    const solid = new Uint32Array(count + 1);
-    for (let i = 0, ii = alpha.length; i < ii; i++) {
-      if (alpha[i] >= 128) {
-        solid[labels[i]]++;
-      }
+  const alpha = new Uint8ClampedArray(N);
+  for (let i = 0; i < N; i++) {
+    const label = labels[i];
+    if (!label || strongPixels[label] < minStrong) {
+      continue;
     }
-    for (let i = 0, ii = alpha.length; i < ii; i++) {
-      if (labels[i] && solid[labels[i]] < minArea) {
-        alpha[i] = 0;
-      }
-    }
+    // Smooth ramp from the weak to the strong threshold.
+    const c = Math.min(1, (darkness[i] - weak) / (strong - weak));
+    alpha[i] = 255 * c * c * (3 - 2 * c);
   }
 
   let minX = width;
@@ -277,7 +369,9 @@ function extractInk(rgba, width, height, options = {}) {
  * @returns {{ x: number, y: number, width: number, height: number } | null}
  */
 function detectSignatureRegion(rgba, width, height) {
-  const { alpha, inkPixels } = extractInk(rgba, width, height);
+  const { alpha, inkPixels } = extractInk(rgba, width, height, {
+    sensitivity: SCAN_PARAMETERS.detectionSensitivity,
+  });
   if (!inkPixels) {
     return null;
   }
@@ -353,6 +447,27 @@ function detectSignatureRegion(rgba, width, height) {
   }
   if (!best) {
     return null;
+  }
+
+  // Signatures often consist of several separate words. Add every blob with
+  // a fair amount of ink that sits on the same line as the largest one.
+  const lineTop = best.minY - (best.maxY - best.minY);
+  const lineBottom = best.maxY + (best.maxY - best.minY);
+  const minInk = best.ink * SCAN_PARAMETERS.detectionMinInkRatio;
+  for (let label = 1; label <= count; label++) {
+    const blob = blobs[label];
+    if (
+      blob !== best &&
+      !blob.touchesBorder &&
+      blob.ink >= minInk &&
+      blob.maxY >= lineTop &&
+      blob.minY <= lineBottom
+    ) {
+      best.minX = Math.min(best.minX, blob.minX);
+      best.minY = Math.min(best.minY, blob.minY);
+      best.maxX = Math.max(best.maxX, blob.maxX);
+      best.maxY = Math.max(best.maxY, blob.maxY);
+    }
   }
 
   const pad = Math.round(Math.max(width, height) * 0.03);
@@ -524,7 +639,7 @@ class SignatureScanController {
    * Start listening to the UI. Called every time the tab is shown.
    * @param {Object} session
    * @param {AbortSignal} session.signal - Aborted when the tab is left.
-   * @param {(bitmap: ImageBitmap) => Object | null} session.extract
+   * @param {(bitmap: ImageBitmap, options: Object) => Object | null} session.extract
    * @param {(data: Object | null, svgPath?: Object) => void} session.onResult
    * @param {(type: "Upload" | "NoData" | null) => void} session.onError
    * @param {(waiting: boolean) => void} session.onWaiting
@@ -681,10 +796,16 @@ class SignatureScanController {
    * @param {1 | -1} direction - 1 for clockwise, -1 for counter-clockwise.
    */
   rotate(direction) {
-    const photo = this.#photo;
-    if (!photo) {
+    if (!this.#photo) {
       return;
     }
+    this.#rotatePhoto(direction);
+    this.#layout();
+    this.#process();
+  }
+
+  #rotatePhoto(direction) {
+    const photo = this.#photo;
     const rotated = createCanvas(photo.height, photo.width);
     const ctx = rotated.getContext("2d", { willReadFrequently: true });
     ctx.translate(rotated.width / 2, rotated.height / 2);
@@ -697,8 +818,6 @@ class SignatureScanController {
           : rotateRectCounterClockwise(this.#crop, photo.width);
     }
     this.#photo = rotated;
-    this.#layout();
-    this.#process();
   }
 
   async #loadFile(file) {
@@ -732,6 +851,12 @@ class SignatureScanController {
     bitmap.close();
     this.#photo = canvas;
     this.#crop = this.#detectCrop();
+    if (this.#crop.height > this.#crop.width * SCAN_PARAMETERS.uprightRatio) {
+      // Signatures are written horizontally, so a tall signature means the
+      // photo was taken sideways. The rotate buttons fix the direction if
+      // this guess turns it upside down.
+      this.#rotatePhoto(-1);
+    }
     this.#updateVisibility();
     this.#layout();
     session?.onWaiting(false);
@@ -970,7 +1095,11 @@ class SignatureScanController {
         return;
       }
       try {
-        result = session.extract(bitmap);
+        result = session.extract(bitmap, {
+          isClean: true,
+          maxDim: SCAN_PARAMETERS.vectorMaxDim,
+          threshold: SCAN_PARAMETERS.vectorThreshold,
+        });
       } catch (e) {
         console.error("SignatureScanController: extraction failed.", e);
       } finally {
@@ -1003,6 +1132,7 @@ class SignatureScanController {
 }
 
 export {
+  boxBlur,
   clampRect,
   DEFAULT_SENSITIVITY,
   detectSignatureRegion,

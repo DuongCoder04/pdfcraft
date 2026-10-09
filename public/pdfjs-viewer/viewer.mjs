@@ -15190,7 +15190,7 @@ class SignatureManager {
     this.#disableButtons(this.#scannedSignatureData);
     this.#scanController.activate({
       signal: this.#currentTabAC.signal,
-      extract: bitmap => this.#currentEditor.getFromImage(bitmap),
+      extract: (bitmap, options) => this.#currentEditor.getFromImage(bitmap, options),
       onResult: data => {
         this.#scannedSignatureData = data;
         this.#disableButtons(data);

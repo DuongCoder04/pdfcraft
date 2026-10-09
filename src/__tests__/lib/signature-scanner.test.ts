@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  boxBlur,
   clampRect,
   detectSignatureRegion,
   estimateBackground,
@@ -81,6 +82,18 @@ describe('Signature Scanner', () => {
     });
   });
 
+  describe('boxBlur', () => {
+    it('should average neighbours and preserve a constant signal', () => {
+      const values = new Float32Array([0, 0, 9, 0, 0]);
+      boxBlur(values, 5, 1, 1);
+      expect(Array.from(values)).toEqual([0, 3, 3, 3, 0]);
+
+      const flat = new Float32Array(12).fill(7);
+      boxBlur(flat, 4, 3, 2);
+      flat.forEach((v) => expect(v).toBeCloseTo(7));
+    });
+  });
+
   describe('sensitivityToThreshold', () => {
     it('should lower the darkness threshold as sensitivity increases', () => {
       expect(sensitivityToThreshold(0)).toBeGreaterThan(sensitivityToThreshold(50));
@@ -128,6 +141,44 @@ describe('Signature Scanner', () => {
       expect(alpha[33 * width + 130]).toBe(255);
       expect(inkPixels).toBeGreaterThan(0);
       expect(bounds).toEqual(stroke);
+    });
+
+    it('should not turn a sharp shadow edge into ink', () => {
+      const width = 200;
+      const height = 120;
+      // The lower half is in the hard shadow of the phone.
+      const paper = (_x: number, y: number) => (y < 60 ? 230 : 120);
+      const stroke = { x: 30, y: 52, width: 140, height: 4 }; // crosses near the edge
+      const rgba = makePhoto(width, height, paper, [stroke], 30);
+
+      const { alpha, bounds } = extractInk(rgba, width, height);
+      for (const y of [58, 59, 60, 61, 62]) {
+        expect(alpha[y * width + 10]).toBe(0);
+        expect(alpha[y * width + 190]).toBe(0);
+      }
+      expect(bounds).toEqual(stroke);
+    });
+
+    it('should keep faint parts of a stroke that touch dark ink (hysteresis)', () => {
+      const width = 200;
+      const height = 60;
+      const rgba = makePhoto(width, height, () => 220);
+      const paint = (x0: number, x1: number, value: number) => {
+        for (let y = 28; y < 32; y++) {
+          for (let x = x0; x < x1; x++) {
+            const i = (y * width + x) * 4;
+            rgba[i] = rgba[i + 1] = rgba[i + 2] = value;
+          }
+        }
+      };
+      paint(20, 100, 40); // dark stroke
+      paint(100, 180, 175); // faint tail, below the threshold on its own
+      paint(10, 15, 175); // equally faint, but not connected to any ink
+
+      const { alpha, bounds } = extractInk(rgba, width, height);
+      expect(alpha[30 * width + 150]).toBeGreaterThan(0);
+      expect(alpha[30 * width + 12]).toBe(0);
+      expect(bounds).toEqual({ x: 20, y: 28, width: 160, height: 4 });
     });
 
     it('should remove isolated specks of noise', () => {
@@ -188,6 +239,21 @@ describe('Signature Scanner', () => {
       expect(r.y + r.height).toBeGreaterThanOrEqual(94);
       // ...but not the table edge.
       expect(r.y + r.height).toBeLessThan(185);
+    });
+
+    it('should frame all words of a signature on the same line', () => {
+      const width = 400;
+      const height = 200;
+      const rgba = makePhoto(width, height, () => 225, [
+        { x: 40, y: 95, width: 90, height: 5 }, // first name
+        { x: 230, y: 92, width: 30, height: 5 }, // initial, far to the right
+        { x: 300, y: 20, width: 1, height: 1 }, // dust above the signature
+      ], 30);
+
+      const r = detectSignatureRegion(rgba, width, height) as Rect;
+      expect(r.x).toBeLessThanOrEqual(40);
+      expect(r.x + r.width).toBeGreaterThanOrEqual(260);
+      expect(r.y).toBeGreaterThan(20);
     });
 
     it('should return null when there is no signature', () => {

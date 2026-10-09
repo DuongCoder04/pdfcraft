@@ -2661,7 +2661,7 @@
 [data-selected="scan"]:is(:is(#addSignatureDialog .mainContainer) #addSignatureActionContainer) > #addSignatureScanContainer{
   display:flex;
   flex-direction:column;
-  height:300px;
+  height:340px;
 }
 
 #addSignatureScanPlaceholder{
@@ -2731,6 +2731,7 @@
 #addSignatureScanWorkspace{
   flex:1 1 auto;
   display:flex;
+  flex-direction:column;
   gap:8px;
   min-height:0;
   padding:8px;
@@ -2738,8 +2739,8 @@
 
 #addSignatureScanStage{
   position:relative;
-  flex:3 1 0;
-  min-width:0;
+  flex:1 1 0;
+  min-height:0;
   overflow:hidden;
   touch-action:none;
   cursor:crosshair;
@@ -2825,10 +2826,10 @@
   }
 }
 
+/* Signatures are wide, so the result is shown as a strip below the photo. */
 #addSignatureScanPreview{
-  flex:2 1 0;
-  min-width:0;
-  height:100%;
+  flex:0 0 64px;
+  width:100%;
   fill:var(--signature-color);
   stroke:none;
   background-color:var(--dialog-bg-color);
@@ -2897,16 +2898,10 @@
           mask-image:url(images/secondaryToolbarButton-rotateCw.svg);
 }
 
-/* Stack the photo and the preview on narrow screens. */
+/* Leave more room for the photo on narrow screens. */
 @media (max-width: 560px){
   [data-selected="scan"]:is(:is(#addSignatureDialog .mainContainer) #addSignatureActionContainer) > #addSignatureScanContainer{
-    height:380px;
-  }
-  #addSignatureScanWorkspace{
-    flex-direction:column;
-  }
-  #addSignatureScanPreview{
-    height:auto;
+    height:360px;
   }
 }
 
