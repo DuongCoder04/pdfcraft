@@ -7,6 +7,8 @@
 
 import { PDFDocument, PDFName, rgb } from 'pdf-lib';
 import { loadPdfjs } from '../loader';
+import { PDFJS_CONFIG } from '../config';
+import { withBasePath } from '../../utils/path';
 
 export type RedactionStyle = 'blackout' | 'whiteout' | 'mosaic' | 'blur' | 'custom-color';
 
@@ -501,6 +503,9 @@ export async function redactPDF(
   const pdfjsLib = await loadPdfjs();
   const pdfDocProxy = await pdfjsLib.getDocument({
     data: arrayBuffer.slice(0),
+    cMapUrl: withBasePath(PDFJS_CONFIG.cMapUrl),
+    cMapPacked: PDFJS_CONFIG.cMapPacked,
+    standardFontDataUrl: withBasePath(PDFJS_CONFIG.standardFontDataUrl),
     disableFontFace: false,
     useSystemFonts: true,
   }).promise;
@@ -535,8 +540,17 @@ export async function redactPDF(
 
     // Rasterize with PDF.js to guarantee 100% irreversible destruction of underlying text/objects
     const pageProxy = await pdfDocProxy.getPage(pageNum);
-    const viewport = pageProxy.getViewport({ scale: renderScale });
     const defaultViewport = pageProxy.getViewport({ scale: 1.0 });
+
+    // Guard against oversized canvas exceeding browser texture limits
+    const MAX_CANVAS_DIM = 4096;
+    let actualScale = renderScale;
+    const maxDim = Math.max(defaultViewport.width, defaultViewport.height) * actualScale;
+    if (maxDim > MAX_CANVAS_DIM) {
+      actualScale = MAX_CANVAS_DIM / Math.max(defaultViewport.width, defaultViewport.height);
+    }
+
+    const viewport = pageProxy.getViewport({ scale: actualScale });
 
     const offscreenCanvas = document.createElement('canvas');
     offscreenCanvas.width = Math.floor(viewport.width);

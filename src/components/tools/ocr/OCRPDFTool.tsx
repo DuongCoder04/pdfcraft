@@ -306,7 +306,9 @@ export function OCRPDFTool({ className = '' }: OCRPDFToolProps) {
         
         setStatus('complete');
       } else {
-        setError(output.error?.message || 'Failed to perform OCR on PDF.');
+        const errMsg = output.error?.message || 'Failed to perform OCR on PDF.';
+        const errDetails = output.error?.details ? ` (${output.error.details})` : '';
+        setError(`${errMsg}${errDetails}`);
         setStatus('error');
       }
     } catch (err) {

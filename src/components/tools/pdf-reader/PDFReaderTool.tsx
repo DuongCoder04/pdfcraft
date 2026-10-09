@@ -5,8 +5,9 @@ import { useTranslations } from 'next-intl';
 import { FileUploader } from '../FileUploader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { Download, X } from 'lucide-react';
+import { Download, X, CopyCheck } from 'lucide-react';
 import { saveBlobFile } from '@/lib/tauri-bridge';
+import { withBasePath } from '@/lib/utils/path';
 
 export interface PDFReaderToolProps {
     className?: string;
@@ -15,7 +16,7 @@ export interface PDFReaderToolProps {
 /**
  * PDFReaderTool Component
  * 
- * A simple PDF reader that uses the browser's built-in PDF viewer.
+ * A full-featured PDF reader with automatic selection-to-clipboard synchronization.
  */
 export function PDFReaderTool({ className = '' }: PDFReaderToolProps) {
     const t = useTranslations('common');
@@ -24,8 +25,51 @@ export function PDFReaderTool({ className = '' }: PDFReaderToolProps) {
     const [file, setFile] = useState<File | null>(null);
     const [pdfUrl, setPdfUrl] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [autoCopyEnabled, setAutoCopyEnabled] = useState(true);
+    const [copiedNotify, setCopiedNotify] = useState<string | null>(null);
 
     const containerRef = useRef<HTMLDivElement>(null);
+    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const lastCopiedRef = useRef<string>('');
+
+    // Sync selected text to clipboard
+    const syncSelection = useCallback((targetWindow?: Window | null) => {
+        if (!autoCopyEnabled) return;
+        try {
+            const win = targetWindow || window;
+            const sel = win.getSelection();
+            const text = sel ? sel.toString().trim() : '';
+            if (text && text.length > 0 && text !== lastCopiedRef.current) {
+                lastCopiedRef.current = text;
+                if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        setCopiedNotify(text.slice(0, 30) + (text.length > 30 ? '...' : ''));
+                        setTimeout(() => setCopiedNotify(null), 2000);
+                    }).catch(() => {});
+                }
+            }
+        } catch {}
+    }, [autoCopyEnabled]);
+
+    // Attach selection listener to host document
+    useEffect(() => {
+        const handleMouseUp = () => syncSelection(window);
+        document.addEventListener('mouseup', handleMouseUp);
+        return () => document.removeEventListener('mouseup', handleMouseUp);
+    }, [syncSelection]);
+
+    // Attach selection listener into iframe contentDocument once loaded
+    const handleIframeLoad = useCallback(() => {
+        try {
+            const iframe = iframeRef.current;
+            if (iframe?.contentDocument && iframe.contentWindow) {
+                const doc = iframe.contentDocument;
+                const win = iframe.contentWindow;
+                doc.addEventListener('mouseup', () => syncSelection(win));
+                doc.addEventListener('touchend', () => syncSelection(win));
+            }
+        } catch {}
+    }, [syncSelection]);
 
     const handleFilesSelected = useCallback((files: File[]) => {
         if (files.length > 0) {
@@ -70,6 +114,7 @@ export function PDFReaderTool({ className = '' }: PDFReaderToolProps) {
         setFile(null);
         setPdfUrl(null);
         setError(null);
+        setCopiedNotify(null);
     }, [pdfUrl]);
 
     const hasFile = file !== null;
@@ -108,6 +153,18 @@ export function PDFReaderTool({ className = '' }: PDFReaderToolProps) {
                                 </span>
                             </div>
                             <div className="flex items-center gap-2">
+                                {/* Auto-copy selection toggle (Ubuntu / Linux Primary Selection feature) */}
+                                <Button
+                                    variant={autoCopyEnabled ? "secondary" : "ghost"}
+                                    size="sm"
+                                    onClick={() => setAutoCopyEnabled(!autoCopyEnabled)}
+                                    className="text-xs h-7 gap-1"
+                                    title={autoCopyEnabled ? "划选自动存入剪贴板 (已开启)" : "划选自动存入剪贴板 (已关闭)"}
+                                >
+                                    <CopyCheck className={`w-3.5 h-3.5 ${autoCopyEnabled ? 'text-primary' : 'text-muted-foreground'}`} />
+                                    <span className="hidden sm:inline">选中文本自动复制</span>
+                                </Button>
+
                                 <Button variant="ghost" size="sm" onClick={handleDownload} title="Download">
                                     <Download className="w-4 h-4" />
                                 </Button>
@@ -118,13 +175,23 @@ export function PDFReaderTool({ className = '' }: PDFReaderToolProps) {
                         </div>
                     </Card>
 
-                    {/* PDF Viewer - Using browser's built-in PDF viewer */}
+                    {/* Copied to clipboard toast feedback */}
+                    {copiedNotify && (
+                        <div className="fixed bottom-6 right-6 z-50 px-3 py-2 rounded-lg bg-foreground text-background text-xs shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2">
+                            <CopyCheck className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>已自动存入剪贴板: <strong>{copiedNotify}</strong></span>
+                        </div>
+                    )}
+
+                    {/* PDF Viewer - Using full-featured PDF.js Viewer */}
                     <div
                         className="relative bg-gray-100 rounded-[var(--radius-md)] overflow-hidden"
                         style={{ height: '80vh', minHeight: '600px' }}
                     >
                         <iframe
-                            src={pdfUrl}
+                            ref={iframeRef}
+                            src={withBasePath(`/pdfjs-viewer/viewer.html?file=${encodeURIComponent(pdfUrl)}`)}
+                            onLoad={handleIframeLoad}
                             className="w-full h-full absolute inset-0 border-0"
                             title={file.name}
                         />

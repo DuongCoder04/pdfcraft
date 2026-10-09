@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
 import { FileUploader } from '../FileUploader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { withBasePath } from '@/lib/utils/path';
 import { saveBlobFile } from '@/lib/tauri-bridge';
+import { SignatureExtractorModal } from './SignatureExtractorModal';
+import { SignatureLibraryModal } from './SignatureLibraryModal';
+import { getSavedSignatures } from '@/lib/pdf/signature-storage';
 
 export interface SignPDFToolProps {
   className?: string;
@@ -40,6 +43,7 @@ type PdfViewerWindow = Window & {
   pdfjsLib?: {
     AnnotationEditorType?: { NONE: number };
   };
+  pdfcraftImportSignature?: (blob: Blob, name?: string) => Promise<boolean>;
 };
 
 const VIEWER_HTML = withBasePath('/pdfjs-viewer/viewer.html');
@@ -59,6 +63,22 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
   });
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Extractor & Library modals
+  const [isExtractorOpen, setIsExtractorOpen] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [savedSignatureCount, setSavedSignatureCount] = useState<number>(0);
+
+  useEffect(() => {
+    setSavedSignatureCount(getSavedSignatures().length);
+  }, [isExtractorOpen, isLibraryOpen]);
+
+  const handleSignatureExtracted = useCallback((res: { blob: Blob; dataUrl: string; name: string }) => {
+    setSavedSignatureCount(getSavedSignatures().length);
+    setToastMessage(`签名“${res.name}”已成功存入签名库！您可以在工具栏的签名笔或签名库中直接使用。`);
+    setTimeout(() => setToastMessage(null), 6000);
+  }, []);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileRef = useRef<File | null>(null);
@@ -247,6 +267,75 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
 
   return (
     <div className={`space-y-6 ${className}`.trim()}>
+      {/* Quick Action Header: Signature Extractor & Library */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/80 to-sky-50/80 border border-blue-200 rounded-[var(--radius-lg)] shadow-xs">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-sm flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <span>从已签署 PDF 提取签名 / 印章</span>
+              <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                支持 Adobe Acrobat
+              </span>
+            </h3>
+            <p className="text-xs text-gray-600 mt-0.5">
+              上传已签名的 PDF，智能识别笔迹或印章并剥离纸张白底，一键存入签名库随时使用。
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsLibraryOpen(true)}
+            className="text-xs bg-white hover:bg-gray-50 flex items-center gap-1.5"
+          >
+            <span>📂 签名库</span>
+            {savedSignatureCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-100 text-blue-700 font-medium">
+                {savedSignatureCount}
+              </span>
+            )}
+          </Button>
+
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setIsExtractorOpen(true)}
+            className="text-xs flex items-center gap-1.5 shadow-sm bg-blue-600 hover:bg-blue-700"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            <span>提取签名</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-[var(--radius-md)] flex items-center justify-between shadow-xs animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-emerald-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span>{toastMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="text-emerald-600 hover:text-emerald-900 text-xs px-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* File Upload Area - Only show when no file */}
       {!signState.file && (
         <FileUploader
@@ -352,6 +441,22 @@ export function SignPDFTool({ className = '' }: SignPDFToolProps) {
           </Card>
         </>
       )}
+
+      {/* Signature Extractor Modal */}
+      <SignatureExtractorModal
+        isOpen={isExtractorOpen}
+        onClose={() => setIsExtractorOpen(false)}
+        viewerWindow={iframeRef.current?.contentWindow}
+        onSignatureExtracted={handleSignatureExtracted}
+      />
+
+      {/* Signature Library Modal */}
+      <SignatureLibraryModal
+        isOpen={isLibraryOpen}
+        onClose={() => setIsLibraryOpen(false)}
+        viewerWindow={iframeRef.current?.contentWindow}
+        onOpenExtractor={() => setIsExtractorOpen(true)}
+      />
     </div>
   );
 }

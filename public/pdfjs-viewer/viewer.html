@@ -785,5 +785,73 @@ See https://github.com/adobe-type-tools/cmap-resources
 
     </div> <!-- outerContainer -->
     <div id="printContainer"></div>
+
+    <!-- Auto-populate clipboard on text selection (matches native Linux Primary Selection behavior) -->
+    <script>
+      (function() {
+        let lastCopiedText = '';
+        function syncSelectionToClipboard() {
+          try {
+            const sel = window.getSelection();
+            const text = sel ? sel.toString().trim() : '';
+            if (text && text.length > 0 && text !== lastCopiedText) {
+              lastCopiedText = text;
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(function() {});
+              }
+            }
+          } catch (e) {}
+        }
+        document.addEventListener('mouseup', syncSelectionToClipboard);
+        document.addEventListener('touchend', syncSelectionToClipboard);
+
+        // PDFCraft bridge for importing extracted signatures
+        window.pdfcraftImportSignature = async function(blob, name) {
+          try {
+            const file = new File([blob], (name || 'signature') + '.png', { type: 'image/png' });
+            const sigBtn = document.getElementById('editorSignatureButton');
+            if (sigBtn) sigBtn.click();
+
+            const imgTabBtn = document.getElementById('addSignatureImageButton');
+            if (imgTabBtn) imgTabBtn.click();
+
+            const filePicker = document.getElementById('addSignatureFilePicker');
+            const descInput = document.getElementById('addSignatureDescInput');
+            const saveCheckbox = document.getElementById('addSignatureSaveCheckbox');
+            const addBtn = document.getElementById('addSignatureAddButton');
+
+            if (filePicker) {
+              const dt = new DataTransfer();
+              dt.items.add(file);
+              filePicker.files = dt.files;
+              filePicker.dispatchEvent(new Event('change', { bubbles: true }));
+
+              if (descInput) {
+                descInput.value = name || 'Extracted Signature';
+                descInput.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+
+              if (saveCheckbox) {
+                saveCheckbox.checked = true;
+              }
+
+              let count = 0;
+              while (addBtn && addBtn.disabled && count < 35) {
+                await new Promise(r => setTimeout(r, 80));
+                count++;
+              }
+
+              if (addBtn && !addBtn.disabled) {
+                addBtn.click();
+                return true;
+              }
+            }
+          } catch (err) {
+            console.error('pdfcraftImportSignature error:', err);
+          }
+          return false;
+        };
+      })();
+    </script>
   </body>
 </html>

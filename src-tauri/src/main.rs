@@ -116,6 +116,17 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    {
+        // Mitigate WebKitGTK / Mesa EGL display initialization failure under modern Wayland (EGL_BAD_PARAMETER)
+        if env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            #[allow(unused_unsafe)]
+            unsafe {
+                env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(exe_path) = env::current_exe() {
