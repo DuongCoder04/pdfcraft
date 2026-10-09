@@ -233,7 +233,7 @@ export const toolContentZh: Record<string, ToolContent> = {
     `,
     howToUse: [
       { step: 1, title: '上传PDF文件', description: '拖放您的PDF文件或点击选择需要签名的文档。' },
-      { step: 2, title: '创建签名', description: '用鼠标或触摸绘制签名，输入姓名生成签名，或上传签名图像。' },
+      { step: 2, title: '创建签名', description: '用鼠标或触摸绘制签名，输入姓名生成签名，或上传签名图像。也可以扫描写在纸上的签名照片。' },
       { step: 3, title: '放置和调整', description: '点击文档放置签名，然后拖动定位和调整大小。' },
       { step: 4, title: '保存并下载', description: '点击保存应用签名并下载已签名的PDF。' },
     ],

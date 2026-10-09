@@ -1906,7 +1906,7 @@
       "uploadDescription": "Arrastre y suelte un archivo PDF para firmar.",
       "instructionsTitle": "Cómo firmar",
       "instruction1": "Haga clic en la herramienta Firma (icono de lápiz) en la barra de herramientas",
-      "instruction2": "Dibuja, escribe o sube tu firma",
+      "instruction2": "Dibuja, escribe o sube tu firma, o escanea una foto de ella",
       "instruction3": "Haga clic donde desea colocar la firma",
       "instruction4": "Haga clic en \"Guardar PDF firmado\" a continuación cuando haya terminado",
       "flattenOption": "Aplanar firma (recomendado: hace que la firma sea permanente)",

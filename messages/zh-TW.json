@@ -1899,7 +1899,7 @@
       "uploadDescription": "拖放PDF檔案到此處進行簽名。",
       "instructionsTitle": "如何簽名",
       "instruction1": "點選工具欄中的簽名工具（鋼筆圖示）",
-      "instruction2": "繪製、輸入或上傳您的簽名",
+      "instruction2": "繪製、輸入或上傳您的簽名，或掃描簽名照片",
       "instruction3": "點選要放置簽名的位置",
       "instruction4": "完成後點選下方的「儲存簽名PDF」",
       "flattenOption": "扁平化簽名（推薦 - 使簽名永久）",

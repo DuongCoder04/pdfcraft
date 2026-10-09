@@ -236,7 +236,7 @@ export const toolContentEn: Record<string, ToolContent> = {
     `,
     howToUse: [
       { step: 1, title: 'Upload Your PDF', description: 'Drag and drop your PDF file or click to select the document you need to sign.' },
-      { step: 2, title: 'Create Your Signature', description: 'Draw your signature with mouse or touch, type your name to generate a signature, or upload a signature image.' },
+      { step: 2, title: 'Create Your Signature', description: 'Draw your signature with mouse or touch, type your name to generate a signature, or upload a signature image. You can also scan a photo of a signature written on paper.' },
       { step: 3, title: 'Place and Adjust', description: 'Click on the document to place your signature, then drag to position and resize as needed.' },
       { step: 4, title: 'Save and Download', description: 'Click Save to apply your signature and download the signed PDF.' },
     ],

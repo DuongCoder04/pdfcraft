@@ -9,6 +9,7 @@ public/pdfjs-viewer/pdf.worker.js
 public/pdfjs-viewer/pdf.sandbox.js
 public/pdfjs-viewer/pdf_viewer.js
 public/pdfjs-viewer/viewer.js
+public/pdfjs-viewer/pdfcraft_signature_scanner.js
 public/workers/pdf.worker.min.js
 
 # Build output

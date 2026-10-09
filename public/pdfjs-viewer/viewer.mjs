@@ -24,6 +24,7 @@
  * pdfjsVersion = 5.4.296
  * pdfjsBuild = f56dc8601
  */
+import { SignatureScanController } from "./pdfcraft_signature_scanner.mjs";
 /******/ // The require scope
 /******/ var __webpack_require__ = {};
 /******/ 
@@ -14714,6 +14715,8 @@ class SignatureManager {
   #imagePickerLink;
   #imagePlaceholder;
   #imageSVG;
+  #scanController = null;
+  #scannedSignatureData = null;
   #saveCheckbox;
   #saveContainer;
   #tabButtons;
@@ -14745,6 +14748,8 @@ class SignatureManager {
     imagePlaceholder,
     imagePicker,
     imagePickerLink,
+    scanButton,
+    scanElements,
     description,
     clearButton,
     cancelButton,
@@ -14829,13 +14834,25 @@ class SignatureManager {
     }, {
       passive: true
     });
-    this.#initTabButtons(typeButton, drawButton, imageButton, panels);
+    if (scanButton && scanElements) {
+      this.#scanController = new SignatureScanController(scanElements);
+      // The tab is hidden in the markup, so that a cached older viewer
+      // script never shows a tab it cannot handle.
+      scanButton.hidden = false;
+      scanElements.placeholder.parentElement.hidden = false;
+    }
+    this.#initTabButtons(typeButton, drawButton, imageButton, scanButton, panels);
     imagePicker.accept = SupportedImageMimeTypes.join(",");
     eventBus._on("storedsignatureschanged", this.#signaturesChanged.bind(this));
     overlayManager.register(dialog);
   }
-  #initTabButtons(typeButton, drawButton, imageButton, panels) {
+  #initTabButtons(typeButton, drawButton, imageButton, scanButton, panels) {
     const buttons = this.#tabButtons = new Map([["type", typeButton], ["draw", drawButton], ["image", imageButton]]);
+    if (this.#scanController) {
+      buttons.set("scan", scanButton);
+    } else {
+      scanButton?.remove();
+    }
     const tabCallback = e => {
       for (const [name, button] of buttons) {
         if (button === e.target) {
@@ -14893,6 +14910,13 @@ class SignatureManager {
         this.#imagePath?.remove();
         this.#imagePath = null;
         break;
+      case "scan":
+        this.#scannedSignatureData = null;
+        this.#scanController?.reset();
+        if (this.#tabsToAltText) {
+          this.#tabsToAltText.get("scan").default = "";
+        }
+        break;
     }
   }
   #initTab(name) {
@@ -14924,6 +14948,9 @@ class SignatureManager {
         break;
       case "image":
         this.#initImageTab(reset);
+        break;
+      case "scan":
+        this.#initScanTab(reset);
         break;
     }
   }
@@ -15163,6 +15190,38 @@ class SignatureManager {
       this.#dialog.classList.toggle("waiting", true);
     }, options);
   }
+  #initScanTab(reset) {
+    if (reset) {
+      this.#resetTab("scan");
+    }
+    this.#disableButtons(this.#scannedSignatureData);
+    this.#scanController.activate({
+      signal: this.#currentTabAC.signal,
+      extract: (bitmap, options) => this.#currentEditor.getFromImage(bitmap, options),
+      onResult: data => {
+        this.#scannedSignatureData = data;
+        this.#disableButtons(data);
+        // Like the Draw tab, suggest a description once per signature.
+        if (data && this.#description.value === "" && !this.#tabsToAltText.get("scan").default) {
+          this.#l10n.get(SignatureManager.#l10nDescription.signature).then(description => {
+            this.#tabsToAltText.get("scan").default = description;
+            this.#description.value ||= description;
+            this.#clearDescription.disabled = this.#description.value === "";
+          });
+        }
+      },
+      onError: type => {
+        if (type) {
+          this.#showError(type);
+        } else {
+          this.#errorBar.hidden = true;
+        }
+      },
+      onWaiting: waiting => {
+        this.#dialog.classList.toggle("waiting", waiting);
+      }
+    });
+  }
   async #extractSignature(file) {
     let data;
     try {
@@ -15400,6 +15459,7 @@ class SignatureManager {
     this.#overlayManager.closeIfActive(this.#dialog);
   }
   #close() {
+    this.#dialog.classList.toggle("waiting", false);
     if (this.#currentEditor._drawId === null) {
       this.#currentEditor.remove();
     }
@@ -15428,6 +15488,9 @@ class SignatureManager {
         break;
       case "image":
         data = this.#extractedSignatureData;
+        break;
+      case "scan":
+        data = this.#scannedSignatureData;
         break;
     }
 
@@ -18327,6 +18390,23 @@ function getViewerConfiguration() {
       imagePlaceholder: document.getElementById("addSignatureImagePlaceholder"),
       imagePicker: document.getElementById("addSignatureFilePicker"),
       imagePickerLink: document.getElementById("addSignatureImageBrowse"),
+      scanButton: document.getElementById("addSignatureScanButton"),
+      scanElements: document.getElementById("addSignatureScanContainer") ? {
+        placeholder: document.getElementById("addSignatureScanPlaceholder"),
+        browseButton: document.getElementById("addSignatureScanBrowse"),
+        cameraButton: document.getElementById("addSignatureScanCamera"),
+        cameraPicker: document.getElementById("addSignatureScanCameraPicker"),
+        filePicker: document.getElementById("addSignatureScanFilePicker"),
+        editor: document.getElementById("addSignatureScanEditor"),
+        stage: document.getElementById("addSignatureScanStage"),
+        canvas: document.getElementById("addSignatureScanCanvas"),
+        cropFrame: document.getElementById("addSignatureScanCropFrame"),
+        preview: document.getElementById("addSignatureScanPreview"),
+        rotateLeftButton: document.getElementById("addSignatureScanRotateLeft"),
+        rotateRightButton: document.getElementById("addSignatureScanRotateRight"),
+        sensitivity: document.getElementById("addSignatureScanSensitivity"),
+        changePhotoButton: document.getElementById("addSignatureScanChangePhoto")
+      } : null,
       description: document.getElementById("addSignatureDescription"),
       clearButton: document.getElementById("clearSignatureButton"),
       saveContainer: document.getElementById("addSignatureSaveContainer"),

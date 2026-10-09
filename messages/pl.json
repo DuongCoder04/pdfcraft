@@ -1921,7 +1921,7 @@
       "uploadDescription": "Przeciągnij i upuść plik PDF, aby go podpisać.",
       "instructionsTitle": "Jak podpisać",
       "instruction1": "Kliknij narzędzie Podpis (ikona pióra) na pasku narzędzi",
-      "instruction2": "Narysuj, wpisz lub prześlij swój podpis",
+      "instruction2": "Narysuj, wpisz lub prześlij swój podpis albo zeskanuj jego zdjęcie",
       "instruction3": "Kliknij miejsce, w którym chcesz umieścić podpis",
       "instruction4": "Po zakończeniu kliknij „Zapisz podpisany PDF” poniżej",
       "flattenOption": "Spłaszcz podpis (zalecane — powoduje, że podpis jest trwały)",
