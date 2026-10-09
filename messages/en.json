@@ -1928,7 +1928,7 @@
       "uploadDescription": "Drag and drop a PDF file to sign.",
       "instructionsTitle": "How to Sign",
       "instruction1": "Click the Signature tool (pen icon) in the toolbar",
-      "instruction2": "Draw, type, or upload your signature",
+      "instruction2": "Draw, type, or upload your signature, or scan a photo of it",
       "instruction3": "Click where you want to place the signature",
       "instruction4": "Click \"Save Signed PDF\" below when done",
       "flattenOption": "Flatten signature (recommended - makes signature permanent)",

@@ -104,7 +104,7 @@ Navigate to `/workflow` or click on "Workflow Editor" in the navigation menu.
 | Tool | Description |
 |------|-------------|
 | **Edit PDF** | Add text, images, annotations, highlights, and shapes |
-| **Sign PDF** | Draw, type, or upload electronic signatures |
+| **Sign PDF** | Draw, type, upload, or scan a photo of your handwritten signature |
 | **Crop PDF** | Trim margins and remove unwanted areas |
 | **Edit Bookmarks** | Add, edit, and manage PDF navigation bookmarks |
 | **Table of Contents** | Generate clickable table of contents from bookmarks |
