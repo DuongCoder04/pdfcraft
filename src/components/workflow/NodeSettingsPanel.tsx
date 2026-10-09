@@ -795,6 +795,7 @@ const getToolSettingsConfig = (): Record<string, ToolSettingsConfig> => ({
                     { value: 'deu', labelKey: 'Deutsch' },
                     { value: 'fra', labelKey: 'Français' },
                     { value: 'spa', labelKey: 'Español' },
+                    { value: 'hun', labelKey: 'Magyar' },
                 ],
             },
         ],

@@ -382,7 +382,7 @@ export function OCRPDFTool({ className = '' }: OCRPDFToolProps) {
   const isProcessing = status === 'processing' || status === 'uploading';
   const canProcess = file && !isProcessing;
 
-  const availableLanguages: OCRLanguage[] = ['eng', 'chi_sim', 'chi_tra', 'jpn', 'kor', 'spa', 'fra', 'deu', 'por', 'ara'];
+  const availableLanguages: OCRLanguage[] = ['eng', 'chi_sim', 'chi_tra', 'jpn', 'kor', 'spa', 'fra', 'deu', 'por', 'ara', 'hun'];
 
   return (
     <div className={`space-y-6 ${className}`.trim()}>
