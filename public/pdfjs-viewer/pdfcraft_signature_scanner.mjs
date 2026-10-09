@@ -31,6 +31,9 @@ const SCAN_PARAMETERS = Object.freeze({
   // Blobs with less ink than this fraction of the largest blob are not
   // considered part of the signature when detecting it.
   detectionMinInkRatio: 0.1,
+  // A background darker than this fraction of the nearby paper is not paper
+  // (e.g. the table) rather than a shadow on it.
+  darkAreaRatio: 0.45,
   // Window radius used to estimate the paper brightness, relative to the
   // longest side of the photo. It must be wider than half a pen stroke, also
   // for felt-tip pens.
@@ -87,12 +90,13 @@ function toGrayscale(rgba, width, height) {
  * Sliding-window maximum or minimum of `src` (length `length`, read with
  * `stride`) over a window of `radius` pixels on each side, written to `dst`.
  * Uses the van Herk/Gil-Werman algorithm: O(1) per pixel for any radius.
+ * The edge pixels are repeated outside the image, so a dark area cut off by
+ * the image border (e.g. the table at the edge of a crop) keeps its size.
  */
 function slidingExtremum(src, dst, offset, stride, length, radius, isMax, g, h) {
   const size = 2 * radius + 1;
   const pick = isMax ? Math.max : Math.min;
-  const pad = isMax ? 0 : 255;
-  const at = i => (i < 0 || i >= length ? pad : src[offset + i * stride]);
+  const at = i => src[offset + Math.min(length - 1, Math.max(0, i)) * stride];
   // g: running extremum from the start of each block, h: from the end.
   const total = length + 2 * radius;
   for (let i = 0; i < total; i++) {
@@ -283,6 +287,28 @@ function labelComponents(mask, width, height) {
 }
 
 /**
+ * Clear the darkness along the border of large dark areas that are not paper,
+ * such as the table around the sheet. The pixels where the paper meets such
+ * an area are darker than the paper but are not ink.
+ * @param {Float32Array} darkness - Modified in place.
+ * @param {Uint8ClampedArray} background - The paper estimate.
+ * @param {number} width
+ * @param {number} height
+ * @param {number} radius - Width of the cleared border, in pixels.
+ */
+function suppressDarkAreaEdges(darkness, background, width, height, radius) {
+  const brightest = squareFilter(background, width, height, radius, true);
+  const darkest = squareFilter(background, width, height, radius, false);
+  const ratio = SCAN_PARAMETERS.darkAreaRatio;
+  for (let i = 0, ii = darkness.length; i < ii; i++) {
+    // A shadow on the paper dims it moderately; the table is much darker.
+    if (darkest[i] < brightest[i] * ratio) {
+      darkness[i] = 0;
+    }
+  }
+}
+
+/**
  * Separate ink from paper.
  *
  * The darkness of every pixel relative to the local paper brightness is
@@ -326,12 +352,11 @@ function extractInk(rgba, width, height, options = {}) {
     const bg = background[i];
     darkness[i] = gray[i] >= bg ? 0 : (255 * (bg - gray[i])) / bg;
   }
-  boxBlur(
-    darkness,
-    width,
-    height,
-    Math.round(Math.max(width, height) / SCAN_PARAMETERS.smoothingScale)
+  const smoothing = Math.round(
+    Math.max(width, height) / SCAN_PARAMETERS.smoothingScale
   );
+  boxBlur(darkness, width, height, smoothing);
+  suppressDarkAreaEdges(darkness, background, width, height, smoothing + 2);
 
   const strong = sensitivityToThreshold(sensitivity);
   const weak = strong * SCAN_PARAMETERS.hysteresisRatio;

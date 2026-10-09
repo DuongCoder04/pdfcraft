@@ -188,6 +188,21 @@ describe('Signature Scanner', () => {
       }
     });
 
+    it('should not mistake a table at the edge of a crop for ink', () => {
+      const width = 300;
+      const height = 120;
+      // A tight crop: a dark table strip along the top and left edges.
+      const paper = (x: number, y: number) => (x < 12 || y < 10 ? 70 : 225);
+      const stroke = { x: 60, y: 60, width: 200, height: 4 };
+      const rgba = makePhoto(width, height, paper, [stroke], 30);
+
+      const { alpha, bounds } = extractInk(rgba, width, height);
+      expect(alpha[5 * width + 150]).toBe(0); // table
+      expect(alpha[60 * width + 5]).toBe(0); // table
+      expect(alpha[11 * width + 150]).toBe(0); // where paper meets table
+      expect(bounds).toEqual(stroke);
+    });
+
     it('should keep faint parts of a stroke that touch dark ink (hysteresis)', () => {
       const width = 200;
       const height = 60;
@@ -283,6 +298,25 @@ describe('Signature Scanner', () => {
       expect(r.x).toBeLessThanOrEqual(40);
       expect(r.x + r.width).toBeGreaterThanOrEqual(260);
       expect(r.y).toBeGreaterThan(20);
+    });
+
+    it('should frame the signature, not the edge of the sheet on a dark table', () => {
+      const width = 400;
+      const height = 300;
+      // Sheet from (60, 50) to (340, 250) on a dark table.
+      const paper = (x: number, y: number) =>
+        x >= 60 && x < 340 && y >= 50 && y < 250 ? 220 : 60;
+      const rgba = makePhoto(width, height, paper, [
+        { x: 120, y: 150, width: 140, height: 4 },
+        { x: 150, y: 135, width: 4, height: 20 },
+      ], 30);
+
+      const r = detectSignatureRegion(rgba, width, height) as Rect;
+      expect(r).not.toBeNull();
+      expect(r.x).toBeGreaterThan(80);
+      expect(r.x + r.width).toBeLessThan(320);
+      expect(r.y).toBeGreaterThan(70);
+      expect(r.y + r.height).toBeLessThan(230);
     });
 
     it('should return null when there is no signature', () => {
