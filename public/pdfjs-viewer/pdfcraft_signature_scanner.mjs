@@ -20,8 +20,10 @@ const SCAN_PARAMETERS = Object.freeze({
   // Longest side of the decoded photo kept in memory. Large enough to keep
   // the full resolution of a typical 12 MP phone photo.
   maxWorkingDim: 4096,
-  // Longest side of the cropped area that is cleaned up.
+  // Longest side of the cropped area that is cleaned up, and the lower value
+  // used for quick previews while the user drags the frame or the slider.
   maxCropDim: 2400,
+  previewCropDim: 1000,
   // Longest side of the downscaled photo used to auto-detect the signature.
   detectionDim: 1024,
   // Detection uses a higher sensitivity so that faint strokes are framed too.
@@ -30,12 +32,13 @@ const SCAN_PARAMETERS = Object.freeze({
   // considered part of the signature when detecting it.
   detectionMinInkRatio: 0.1,
   // Window radius used to estimate the paper brightness, relative to the
-  // longest side. It must be wider than half a pen stroke.
+  // longest side of the photo. It must be wider than half a pen stroke, also
+  // for felt-tip pens.
   backgroundRadiusRatio: 0.012,
   minBackgroundRadius: 4,
   // Darkness threshold (0-255, relative to the paper) for sensitivity 0..100.
   minThreshold: 12,
-  maxThreshold: 120,
+  maxThreshold: 100,
   // Pixels at least this fraction of the threshold dark are kept when they
   // touch a stroke (hysteresis), so thin and faint parts of strokes survive.
   hysteresisRatio: 0.5,
@@ -46,9 +49,10 @@ const SCAN_PARAMETERS = Object.freeze({
   speckleAreaRatio: 0.00002,
   minSpeckleArea: 6,
   // A detected signature this much taller than wide is rotated upright.
-  uprightRatio: 1.5,
+  uprightRatio: 2,
   // Longest side of the image PDF.js turns into a vector signature.
   vectorMaxDim: 2048,
+  previewVectorMaxDim: 1024,
   // Gray level (0-255) below which PDF.js counts a pixel as ink. Contours run
   // along the inside of the edge, so a value above 127 keeps the strokes as
   // thick as they are on paper.
@@ -127,8 +131,9 @@ function squareFilter(src, width, height, radius, isMax) {
  * of the phone or hand, so a single global threshold does not work. A
  * grayscale morphological closing (maximum filter followed by a minimum
  * filter) removes every dark detail narrower than the window, i.e. the pen
- * strokes, while following lighting gradients and shadow edges. A light blur
- * removes the blockiness of the square window.
+ * strokes, while following lighting gradients and shadow edges. Bright
+ * noise peaks are clipped beforehand and a light blur afterwards removes the
+ * blockiness of the window.
  * @param {Uint8ClampedArray} gray
  * @param {number} width
  * @param {number} height
@@ -136,13 +141,29 @@ function squareFilter(src, width, height, radius, isMax) {
  * @returns {Uint8ClampedArray}
  */
 function estimateBackground(gray, width, height, radius) {
-  const r =
-    radius ||
-    Math.max(
-      SCAN_PARAMETERS.minBackgroundRadius,
-      Math.round(Math.max(width, height) * SCAN_PARAMETERS.backgroundRadiusRatio)
-    );
-  const closed = squareFilter(squareFilter(gray, width, height, r, true), width, height, r, false);
+  const r = Math.max(
+    SCAN_PARAMETERS.minBackgroundRadius,
+    Math.round(
+      radius || Math.max(width, height) * SCAN_PARAMETERS.backgroundRadiusRatio
+    )
+  );
+  // Bright noise peaks are clipped first: the maximum filter would otherwise
+  // pick them and overestimate the paper, so that the faint halo around every
+  // stroke would count as ink. Only clipping (taking the minimum with a
+  // blurred copy) keeps sharp shadow edges sharp.
+  const blurred = Float32Array.from(gray);
+  boxBlur(blurred, width, height, Math.max(1, Math.round(r / 6)));
+  const clipped = new Uint8ClampedArray(gray.length);
+  for (let i = 0, ii = gray.length; i < ii; i++) {
+    clipped[i] = Math.min(gray[i], blurred[i]);
+  }
+  const closed = squareFilter(
+    squareFilter(clipped, width, height, r, true),
+    width,
+    height,
+    r,
+    false
+  );
   const smooth = Float32Array.from(closed);
   boxBlur(smooth, width, height, Math.max(1, r >> 2));
   const background = new Uint8ClampedArray(width * height);
@@ -275,7 +296,14 @@ function labelComponents(mask, width, height) {
  * @param {Uint8ClampedArray} rgba
  * @param {number} width
  * @param {number} height
- * @param {{ sensitivity?: number, despeckle?: boolean }} [options]
+ * @param {{
+ *   sensitivity?: number,
+ *   despeckle?: boolean,
+ *   backgroundRadius?: number,
+ * }} [options] - `backgroundRadius` must be wider than half a pen stroke.
+ *   It defaults to a fraction of the image size; pass a value derived from the
+ *   whole photo when `rgba` is a tight crop, so thick strokes are not
+ *   mistaken for paper.
  * @returns {{
  *   alpha: Uint8ClampedArray,
  *   bounds: { x: number, y: number, width: number, height: number } | null,
@@ -283,10 +311,14 @@ function labelComponents(mask, width, height) {
  * }}
  */
 function extractInk(rgba, width, height, options = {}) {
-  const { sensitivity = DEFAULT_SENSITIVITY, despeckle = true } = options;
+  const {
+    sensitivity = DEFAULT_SENSITIVITY,
+    despeckle = true,
+    backgroundRadius,
+  } = options;
   const N = width * height;
   const gray = toGrayscale(rgba, width, height);
-  const background = estimateBackground(gray, width, height);
+  const background = estimateBackground(gray, width, height, backgroundRadius);
 
   // Darkness relative to the local paper brightness, 0..255.
   const darkness = new Float32Array(N);
@@ -560,6 +592,18 @@ function renderInkOnPaper(alpha, width, height, bounds) {
 const RESIZE_HANDLES = ["nw", "ne", "sw", "se"];
 const KEYBOARD_STEP_RATIO = 0.01;
 const MIN_CROP_SCREEN_SIZE = 24;
+// Pointer movement, in screen pixels, before a drag starts a new frame.
+const NEW_FRAME_THRESHOLD = 4;
+
+/**
+ * Free a canvas' backing store right away. Safari in particular keeps it
+ * alive for a while and has a low limit on the total canvas memory.
+ */
+function releaseCanvas(canvas) {
+  if (canvas) {
+    canvas.width = canvas.height = 0;
+  }
+}
 
 function createCanvas(width, height) {
   const canvas = document.createElement("canvas");
@@ -598,7 +642,8 @@ class SignatureScanController {
   #displayScale = 1;
   #drag = null;
   #debounceTimer = null;
-  #generation = 0;
+  #generation = 0; // Invalidates pending processing results.
+  #loadGeneration = 0; // Invalidates photos that are still being decoded.
   #session = null;
   #resizeObserver = null;
 
@@ -678,12 +723,18 @@ class SignatureScanController {
     el.browseButton.addEventListener("click", () => el.filePicker.click(), passive);
     el.cameraButton.addEventListener("click", () => el.cameraPicker.click(), passive);
 
-    el.placeholder.addEventListener(
+    // The whole panel accepts a dropped photo, also to replace the current one.
+    const dropZone = el.placeholder.parentElement;
+    dropZone.addEventListener(
       "dragover",
       e => {
-        const hasImage = Array.from(e.dataTransfer.items).some(item =>
-          item.type.startsWith("image/")
-        );
+        // Safari does not expose the type of dragged files before the drop,
+        // so an untyped file is accepted here and checked on drop.
+        const hasImage =
+          e.dataTransfer.types.includes("Files") &&
+          Array.from(e.dataTransfer.items).some(
+            item => item.type === "" || item.type.startsWith("image/")
+          );
         e.dataTransfer.dropEffect = hasImage ? "copy" : "none";
         if (hasImage) {
           e.preventDefault();
@@ -692,7 +743,7 @@ class SignatureScanController {
       },
       options
     );
-    el.placeholder.addEventListener(
+    dropZone.addEventListener(
       "drop",
       e => {
         const file = Array.from(e.dataTransfer?.files || []).find(f =>
@@ -734,8 +785,13 @@ class SignatureScanController {
           "data-l10n-args",
           JSON.stringify({ sensitivity: Number(el.sensitivity.value) })
         );
-        this.#scheduleProcessing();
+        this.#scheduleProcessing(/* quick = */ true);
       },
+      passive
+    );
+    el.sensitivity.addEventListener(
+      "change",
+      () => this.#scheduleProcessing(),
       passive
     );
     el.changePhotoButton.addEventListener(
@@ -748,6 +804,7 @@ class SignatureScanController {
     el.stage.addEventListener("pointermove", this.#onPointerMove.bind(this), options);
     el.stage.addEventListener("pointerup", this.#onPointerUp.bind(this), options);
     el.stage.addEventListener("pointercancel", this.#onPointerUp.bind(this), options);
+    el.stage.addEventListener("lostpointercapture", this.#onPointerUp.bind(this), options);
     el.cropFrame.addEventListener("keydown", this.#onKeyDown.bind(this), options);
 
     this.#resizeObserver = new ResizeObserver(() => this.#layout());
@@ -759,6 +816,8 @@ class SignatureScanController {
         this.#resizeObserver = null;
         clearTimeout(this.#debounceTimer);
         this.#generation++;
+        this.#loadGeneration++;
+        this.#drag = null;
         this.#session = null;
       },
       { once: true }
@@ -775,6 +834,8 @@ class SignatureScanController {
   reset() {
     clearTimeout(this.#debounceTimer);
     this.#generation++;
+    this.#loadGeneration++;
+    releaseCanvas(this.#photo);
     this.#photo = null;
     this.#crop = null;
     this.#drag = null;
@@ -782,7 +843,7 @@ class SignatureScanController {
     el.canvas.width = el.canvas.height = 0;
     el.preview.replaceChildren();
     el.preview.removeAttribute("viewBox");
-    el.sensitivity.value = DEFAULT_SENSITIVITY;
+    el.sensitivity.value = String(DEFAULT_SENSITIVITY);
     el.sensitivity.setAttribute(
       "data-l10n-args",
       JSON.stringify({ sensitivity: DEFAULT_SENSITIVITY })
@@ -817,12 +878,13 @@ class SignatureScanController {
           ? rotateRectClockwise(this.#crop, photo.height)
           : rotateRectCounterClockwise(this.#crop, photo.width);
     }
+    releaseCanvas(photo);
     this.#photo = rotated;
   }
 
   async #loadFile(file) {
     const session = this.#session;
-    const generation = ++this.#generation;
+    const generation = ++this.#loadGeneration;
     let bitmap;
     try {
       // `from-image` applies the EXIF orientation written by phone cameras.
@@ -830,36 +892,46 @@ class SignatureScanController {
     } catch (e) {
       console.error("SignatureScanController: cannot decode image.", e);
     }
-    if (generation !== this.#generation || session !== this.#session) {
+    if (generation !== this.#loadGeneration || session !== this.#session) {
+      // A newer photo, a reset or leaving the tab superseded this one.
       bitmap?.close();
-      return;
-    }
-    if (!bitmap) {
       session?.onWaiting(false);
-      session?.onError("Upload");
       return;
     }
 
-    const { canvas } = drawScaled(
-      bitmap,
-      0,
-      0,
-      bitmap.width,
-      bitmap.height,
-      SCAN_PARAMETERS.maxWorkingDim
-    );
-    bitmap.close();
-    this.#photo = canvas;
-    this.#crop = this.#detectCrop();
-    if (this.#crop.height > this.#crop.width * SCAN_PARAMETERS.uprightRatio) {
-      // Signatures are written horizontally, so a tall signature means the
-      // photo was taken sideways. The rotate buttons fix the direction if
-      // this guess turns it upside down.
-      this.#rotatePhoto(-1);
+    try {
+      if (!bitmap) {
+        throw new Error("The image could not be decoded.");
+      }
+      const { canvas } = drawScaled(
+        bitmap,
+        0,
+        0,
+        bitmap.width,
+        bitmap.height,
+        SCAN_PARAMETERS.maxWorkingDim
+      );
+      releaseCanvas(this.#photo);
+      this.#photo = canvas;
+      this.#crop = this.#detectCrop();
+      if (this.#crop.height > this.#crop.width * SCAN_PARAMETERS.uprightRatio) {
+        // Signatures are written horizontally, so a tall signature means the
+        // photo was taken sideways. The rotate buttons fix the direction if
+        // this guess turns it upside down.
+        this.#rotatePhoto(-1);
+      }
+    } catch (e) {
+      console.error("SignatureScanController: cannot load image.", e);
+      session.onWaiting(false);
+      session.onError("Upload");
+      return;
+    } finally {
+      bitmap?.close();
     }
+
     this.#updateVisibility();
     this.#layout();
-    session?.onWaiting(false);
+    session.onWaiting(false);
     this.#process();
     this.#elements.cropFrame.focus({ preventScroll: true });
   }
@@ -876,6 +948,7 @@ class SignatureScanController {
       SCAN_PARAMETERS.detectionDim
     );
     const { data } = small.ctx.getImageData(0, 0, small.width, small.height);
+    releaseCanvas(small.canvas);
     const region = detectSignatureRegion(data, small.width, small.height);
     if (region) {
       const ratio = photo.width / small.width;
@@ -960,7 +1033,7 @@ class SignatureScanController {
   }
 
   #onPointerDown(e) {
-    if (!this.#photo || !e.isPrimary || e.button > 0) {
+    if (!this.#photo || this.#drag || !e.isPrimary || e.button > 0) {
       return;
     }
     e.preventDefault();
@@ -972,25 +1045,40 @@ class SignatureScanController {
     } else if (e.target === this.#elements.cropFrame) {
       mode = "move";
     } else {
-      // Start a new frame from the pointer position.
-      mode = "se";
-      this.#crop = { x: point.x, y: point.y, width: 0, height: 0 };
+      // A new frame is only started once the pointer actually moves, so a
+      // stray click does not discard the current frame.
+      mode = "new";
     }
-    this.#drag = { mode, start: point, crop: { ...this.#crop } };
+    this.#drag = {
+      mode,
+      pointerId: e.pointerId,
+      start: point,
+      crop: { ...this.#crop },
+    };
     this.#elements.stage.setPointerCapture(e.pointerId);
     this.#elements.cropFrame.focus({ preventScroll: true });
   }
 
   #onPointerMove(e) {
     const drag = this.#drag;
-    if (!drag) {
+    if (!drag || e.pointerId !== drag.pointerId) {
       return;
     }
     e.preventDefault();
     const point = this.#toPhotoPoint(e);
     const { width: maxW, height: maxH } = this.#photo;
-    const { crop, start, mode } = drag;
+    const { start } = drag;
 
+    if (drag.mode === "new") {
+      const distance = Math.hypot(point.x - start.x, point.y - start.y);
+      if (distance * this.#displayScale < NEW_FRAME_THRESHOLD) {
+        return;
+      }
+      drag.mode = "se";
+      drag.crop = { x: start.x, y: start.y, width: 0, height: 0 };
+    }
+
+    const { crop, mode } = drag;
     if (mode === "move") {
       this.#crop = clampRect(
         {
@@ -1013,15 +1101,21 @@ class SignatureScanController {
       };
     }
     this.#updateCropFrame();
-    this.#scheduleProcessing();
+    this.#scheduleProcessing(/* quick = */ true);
   }
 
   #onPointerUp(e) {
-    if (!this.#drag) {
+    const drag = this.#drag;
+    if (!drag || e.pointerId !== drag.pointerId) {
       return;
     }
     this.#drag = null;
-    this.#elements.stage.releasePointerCapture?.(e.pointerId);
+    if (this.#elements.stage.hasPointerCapture?.(e.pointerId)) {
+      this.#elements.stage.releasePointerCapture(e.pointerId);
+    }
+    if (drag.mode === "new") {
+      return;
+    }
     const minSize = MIN_CROP_SCREEN_SIZE / this.#displayScale;
     this.#crop = clampRect(this.#crop, this.#photo.width, this.#photo.height, minSize);
     this.#updateCropFrame();
@@ -1052,16 +1146,24 @@ class SignatureScanController {
     this.#scheduleProcessing();
   }
 
-  #scheduleProcessing() {
+  /**
+   * @param {boolean} [quick] - Process at a lower resolution, for live
+   *   feedback while the frame or the slider is being dragged.
+   */
+  #scheduleProcessing(quick = false) {
     clearTimeout(this.#debounceTimer);
     this.#debounceTimer = setTimeout(
-      () => this.#process(),
+      () => this.#process(quick),
       SCAN_PARAMETERS.debounceMs
     );
   }
 
-  /** Clean the framed area and let PDF.js turn it into a signature. */
-  async #process() {
+  /**
+   * Clean the framed area and let PDF.js turn it into a signature.
+   * @param {boolean} [quick] - See `#scheduleProcessing`. A quick result is
+   *   only previewed; the signature can be added once the full one is ready.
+   */
+  async #process(quick = false) {
     clearTimeout(this.#debounceTimer);
     const session = this.#session;
     const photo = this.#photo;
@@ -1070,49 +1172,67 @@ class SignatureScanController {
       return;
     }
     const generation = ++this.#generation;
-
-    const area = drawScaled(
-      photo,
-      crop.x,
-      crop.y,
-      crop.width,
-      crop.height,
-      SCAN_PARAMETERS.maxCropDim
-    );
-    const { data } = area.ctx.getImageData(0, 0, area.width, area.height);
-    const { alpha, bounds } = extractInk(data, area.width, area.height, {
-      sensitivity: Number(this.#elements.sensitivity.value),
-    });
+    if (quick) {
+      session.onResult(null);
+    }
 
     let result = null;
-    if (bounds) {
-      const ink = renderInkOnPaper(alpha, area.width, area.height, bounds);
-      const bitmap = await createImageBitmap(
-        new ImageData(ink.data, ink.width, ink.height)
+    try {
+      const area = drawScaled(
+        photo,
+        crop.x,
+        crop.y,
+        crop.width,
+        crop.height,
+        quick ? SCAN_PARAMETERS.previewCropDim : SCAN_PARAMETERS.maxCropDim
       );
-      if (generation !== this.#generation) {
-        bitmap.close();
-        return;
+      const { data } = area.ctx.getImageData(0, 0, area.width, area.height);
+      releaseCanvas(area.canvas);
+      // Size the paper estimate on the whole photo, not on the crop, so that
+      // thick strokes in a tight frame are not taken for paper.
+      const scale = area.width / crop.width;
+      const { alpha, bounds } = extractInk(data, area.width, area.height, {
+        sensitivity: Number(this.#elements.sensitivity.value),
+        backgroundRadius:
+          Math.max(photo.width, photo.height) *
+          SCAN_PARAMETERS.backgroundRadiusRatio *
+          scale,
+      });
+
+      if (bounds) {
+        const ink = renderInkOnPaper(alpha, area.width, area.height, bounds);
+        const bitmap = await createImageBitmap(
+          new ImageData(ink.data, ink.width, ink.height)
+        );
+        if (generation !== this.#generation) {
+          bitmap.close();
+          return;
+        }
+        try {
+          result = session.extract(bitmap, {
+            isClean: true,
+            maxDim: quick
+              ? SCAN_PARAMETERS.previewVectorMaxDim
+              : SCAN_PARAMETERS.vectorMaxDim,
+            threshold: SCAN_PARAMETERS.vectorThreshold,
+          });
+        } finally {
+          bitmap.close();
+        }
       }
-      try {
-        result = session.extract(bitmap, {
-          isClean: true,
-          maxDim: SCAN_PARAMETERS.vectorMaxDim,
-          threshold: SCAN_PARAMETERS.vectorThreshold,
-        });
-      } catch (e) {
-        console.error("SignatureScanController: extraction failed.", e);
-      } finally {
-        bitmap.close();
-      }
+    } catch (e) {
+      console.error("SignatureScanController: processing failed.", e);
+      result = null;
     }
 
     if (generation !== this.#generation) {
       return;
     }
     this.#renderPreview(result);
-    session.onError(result ? null : "NoData");
-    session.onResult(result);
+    if (!quick) {
+      session.onError(result ? null : "NoData");
+      session.onResult(result);
+    }
   }
 
   #renderPreview(result) {

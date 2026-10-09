@@ -14836,6 +14836,10 @@ class SignatureManager {
     });
     if (scanButton && scanElements) {
       this.#scanController = new SignatureScanController(scanElements);
+      // The tab is hidden in the markup, so that a cached older viewer
+      // script never shows a tab it cannot handle.
+      scanButton.hidden = false;
+      scanElements.placeholder.parentElement.hidden = false;
     }
     this.#initTabButtons(typeButton, drawButton, imageButton, scanButton, panels);
     imagePicker.accept = SupportedImageMimeTypes.join(",");
@@ -14909,6 +14913,9 @@ class SignatureManager {
       case "scan":
         this.#scannedSignatureData = null;
         this.#scanController?.reset();
+        if (this.#tabsToAltText) {
+          this.#tabsToAltText.get("scan").default = "";
+        }
         break;
     }
   }
@@ -15194,7 +15201,8 @@ class SignatureManager {
       onResult: data => {
         this.#scannedSignatureData = data;
         this.#disableButtons(data);
-        if (data && this.#description.value === "") {
+        // Like the Draw tab, suggest a description once per signature.
+        if (data && this.#description.value === "" && !this.#tabsToAltText.get("scan").default) {
           this.#l10n.get(SignatureManager.#l10nDescription.signature).then(description => {
             this.#tabsToAltText.get("scan").default = description;
             this.#description.value ||= description;
@@ -15451,6 +15459,7 @@ class SignatureManager {
     this.#overlayManager.closeIfActive(this.#dialog);
   }
   #close() {
+    this.#dialog.classList.toggle("waiting", false);
     if (this.#currentEditor._drawId === null) {
       this.#currentEditor.remove();
     }

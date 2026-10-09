@@ -2702,7 +2702,7 @@
 }
 
 /* Taking a photo directly only makes sense on phones and tablets. */
-@media not (pointer: coarse){
+@media not all and (pointer: coarse){
   #addSignatureScanCamera{
     display:none !important;
   }
@@ -2827,9 +2827,15 @@
 }
 
 /* Signatures are wide, so the result is shown as a strip below the photo. */
-#addSignatureScanPreview{
+#addSignatureScanPreviewContainer{
   flex:0 0 64px;
   width:100%;
+}
+
+#addSignatureScanPreview{
+  display:block;
+  width:100%;
+  height:100%;
   fill:var(--signature-color);
   stroke:none;
   background-color:var(--dialog-bg-color);

@@ -23578,7 +23578,7 @@ class SignatureExtractor {
     // guessing are skipped, which would otherwise thicken the strokes;
     // `options.threshold` and `options.maxDim` control the stroke edge and
     // how much detail is kept.
-    const [uint8Buf, width, height] = this.#getGrayPixels(bitmap, options?.maxDim);
+    const [uint8Buf, width, height] = this.#getGrayPixels(bitmap, options?.maxDim || undefined);
     let buffer, threshold;
     if (options?.isClean) {
       buffer = uint8Buf;

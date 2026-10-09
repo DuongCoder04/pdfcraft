@@ -159,6 +159,35 @@ describe('Signature Scanner', () => {
       expect(bounds).toEqual(stroke);
     });
 
+    it('should keep thick felt-tip strokes when the background radius fits the photo', () => {
+      // A tight crop (600 x 200) of a signature written with a thick pen: the
+      // stroke is 3% of the crop width.
+      const width = 600;
+      const height = 200;
+      const stroke = { x: 50, y: 90, width: 500, height: 18 };
+      const rgba = makePhoto(width, height, () => 225, [stroke], 30);
+
+      // Sized on the crop alone, the window is too small: the middle of the
+      // stroke is taken for paper and the stroke comes out hollow.
+      const middle = (stroke.y + stroke.height / 2) * width + 300;
+      expect(extractInk(rgba, width, height).alpha[middle]).toBe(0);
+
+      // Sized on the whole photo (here 4x the crop), the stroke stays solid.
+      const { alpha, bounds } = extractInk(rgba, width, height, {
+        backgroundRadius: 4 * width * 0.012,
+      });
+      // The 1 px smoothing softens the edge by one pixel on each side.
+      expect(bounds).toEqual({
+        x: stroke.x - 1,
+        y: stroke.y - 1,
+        width: stroke.width + 2,
+        height: stroke.height + 2,
+      });
+      for (let y = stroke.y; y < stroke.y + stroke.height; y++) {
+        expect(alpha[y * width + 300]).toBe(255);
+      }
+    });
+
     it('should keep faint parts of a stroke that touch dark ink (hysteresis)', () => {
       const width = 200;
       const height = 60;
